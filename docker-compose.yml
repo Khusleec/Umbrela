@@ -2,18 +2,16 @@ version: '3.8'
 
 services:
   # Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: delivery-postgres
+  mysql:
+    image: mysql:8.0
+    container_name: delivery-mysql
     environment:
-      POSTGRES_DB: delivery_tracking
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      MYSQL_DATABASE: umbrela
+      MYSQL_ROOT_PASSWORD: Zz11zz211!
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - mysql_data:/var/lib/mysql
     networks:
       - delivery-network
 
@@ -38,18 +36,18 @@ services:
     container_name: auth-service
     environment:
       NODE_ENV: production
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: delivery_tracking
-      DB_USER: postgres
-      DB_PASSWORD: password
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: umbrela
+      DB_USER: root
+      DB_PASSWORD: Zz11zz211!
       REDIS_HOST: redis
       REDIS_PORT: 6379
       JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
     ports:
       - "3001:3001"
     depends_on:
-      - postgres
+      - mysql
       - redis
     volumes:
       - ./services/auth/logs:/app/logs
@@ -64,11 +62,11 @@ services:
     container_name: order-service
     environment:
       NODE_ENV: production
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: delivery_tracking
-      DB_USER: postgres
-      DB_PASSWORD: password
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: umbrela
+      DB_USER: root
+      DB_PASSWORD: Zz11zz211!
       REDIS_HOST: redis
       REDIS_PORT: 6379
       AUTH_SERVICE_URL: http://auth-service:3001
@@ -76,7 +74,7 @@ services:
     ports:
       - "3002:3002"
     depends_on:
-      - postgres
+      - mysql
       - redis
       - auth-service
     volumes:
@@ -92,18 +90,18 @@ services:
     container_name: driver-service
     environment:
       NODE_ENV: production
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: delivery_tracking
-      DB_USER: postgres
-      DB_PASSWORD: password
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: umbrela
+      DB_USER: root
+      DB_PASSWORD: Zz11zz211!
       REDIS_HOST: redis
       REDIS_PORT: 6379
       AUTH_SERVICE_URL: http://auth-service:3001
     ports:
       - "3003:3003"
     depends_on:
-      - postgres
+      - mysql
       - redis
       - auth-service
     volumes:
@@ -119,18 +117,18 @@ services:
     container_name: analytics-service
     environment:
       NODE_ENV: production
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: delivery_tracking
-      DB_USER: postgres
-      DB_PASSWORD: password
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: umbrela
+      DB_USER: root
+      DB_PASSWORD: Zz11zz211!
       REDIS_HOST: redis
       REDIS_PORT: 6379
       AUTH_SERVICE_URL: http://auth-service:3001
     ports:
       - "3004:3004"
     depends_on:
-      - postgres
+      - mysql
       - redis
       - auth-service
     volumes:
@@ -146,11 +144,11 @@ services:
     container_name: notification-service
     environment:
       NODE_ENV: production
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: delivery_tracking
-      DB_USER: postgres
-      DB_PASSWORD: password
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: umbrela
+      DB_USER: root
+      DB_PASSWORD: Zz11zz211!
       REDIS_HOST: redis
       REDIS_PORT: 6379
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
@@ -161,7 +159,7 @@ services:
     ports:
       - "3005:3005"
     depends_on:
-      - postgres
+      - mysql
       - redis
     volumes:
       - ./services/notifications/logs:/app/logs
@@ -210,7 +208,7 @@ services:
       - delivery-network
 
 volumes:
-  postgres_data:
+  mysql_data:
   redis_data:
 
 networks:

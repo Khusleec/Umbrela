@@ -11,6 +11,6 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.6.1",
-    "pg": "^8.20.0"
+    "mysql2": "^3.11.0"
   }
 }

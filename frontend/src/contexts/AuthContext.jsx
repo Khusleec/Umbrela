@@ -20,7 +20,7 @@ export const AuthProvider = ({ children }) => {
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
       // Validate token
-      axios.get('/api/validate')
+      axios.get('/api/auth/validate')
         .then(response => {
           setUser(response.data.user)
         })
@@ -38,7 +38,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const response = await axios.post('/api/login', { email, password })
+      const response = await axios.post('/api/auth/login', { email, password })
       const { token, user } = response.data
       
       localStorage.setItem('token', token)
@@ -54,6 +54,35 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
+  const register = async ({ name, email, password, role, companyId }) => {
+    try {
+      const payload = {
+        name,
+        email,
+        password,
+        role,
+      }
+
+      if (role === 'company') {
+        payload.companyId = Number(companyId)
+      }
+
+      const response = await axios.post('/api/auth/register', payload)
+      const { token, user } = response.data
+
+      localStorage.setItem('token', token)
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
+      setUser(user)
+
+      return { success: true }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.response?.data?.error || 'Registration failed',
+      }
+    }
+  }
+
   const logout = () => {
     localStorage.removeItem('token')
     delete axios.defaults.headers.common['Authorization']
@@ -63,6 +92,7 @@ export const AuthProvider = ({ children }) => {
   const value = {
     user,
     login,
+    register,
     logout,
     loading
   }

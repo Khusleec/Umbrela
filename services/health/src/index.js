@@ -11,6 +11,16 @@ const PORT = process.env.HEALTH_SERVICE_PORT || 3006;
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const expectedToken = process.env.CSRF_TOKEN;
+  if (!expectedToken) return next();
+  const providedToken = req.headers['x-csrf-token'];
+  if (providedToken !== expectedToken) {
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  }
+  next();
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {

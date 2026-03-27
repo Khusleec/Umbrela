@@ -15,9 +15,21 @@ spec:
       labels:
         app: api-gateway
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
       containers:
       - name: api-gateway
-        image: delivery-tracking/api-gateway:latest
+        image: delivery-tracking/api-gateway:1.0.0
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 3000
         envFrom:

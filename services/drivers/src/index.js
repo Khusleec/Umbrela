@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const dotenv = require('dotenv');
-const { Pool } = require('pg');
+const mysql = require('mysql2/promise');
 const redis = require('redis');
 const Joi = require('joi');
 const winston = require('winston');
@@ -15,20 +15,14 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 const PORT = process.env.DRIVER_SERVICE_PORT || 3003;
 
 const logger = winston.createLogger({
   level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
+  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
   transports: [
     new winston.transports.Console(),
     new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
@@ -36,17 +30,21 @@ const logger = winston.createLogger({
   ]
 });
 
-const pgClient = new Pool({
+const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'delivery_tracking',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'password',
+  port: process.env.DB_PORT || 3306,
+  database: process.env.DB_NAME || 'umbrela',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  waitForConnections: true,
+  connectionLimit: 10,
 });
 
 const redisClient = redis.createClient({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
+  socket: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: process.env.REDIS_PORT || 6379,
+  }
 });
 
 redisClient.on('error', (err) => logger.error('Redis Client Error', err));
@@ -54,6 +52,16 @@ redisClient.on('error', (err) => logger.error('Redis Client Error', err));
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const expectedToken = process.env.CSRF_TOKEN;
+  if (!expectedToken) return next();
+  const providedToken = req.headers['x-csrf-token'];
+  if (providedToken !== expectedToken) {
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  }
+  next();
+});
 
 const updateLocationSchema = Joi.object({
   lat: Joi.number().min(-90).max(90).required(),
@@ -69,17 +77,13 @@ const authenticateToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) {
-      return res.status(401).json({ error: 'Access token required' });
-    }
+    if (!token) return res.status(401).json({ error: 'Access token required' });
 
     const response = await axios.get(`${process.env.AUTH_SERVICE_URL || 'http://localhost:3001'}/validate`, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
-    if (!response.data.valid) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
+    if (!response.data.valid) return res.status(403).json({ error: 'Invalid or expired token' });
 
     req.user = response.data.user;
     next();
@@ -89,13 +93,9 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
-const authorize = (roles) => {
-  return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-    next();
-  };
+const authorize = (roles) => (req, res, next) => {
+  if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Insufficient permissions' });
+  next();
 };
 
 const broadcastDriverUpdate = (driverId, updateData) => {
@@ -112,28 +112,24 @@ app.get('/drivers', authenticateToken, async (req, res) => {
   try {
     let query = 'SELECT d.*, u.email FROM drivers d JOIN users u ON d.user_id = u.id WHERE 1=1';
     const params = [];
-    let paramIndex = 1;
 
     if (req.user.role === 'company') {
-      query += ` AND d.company_id = $${paramIndex}`;
+      query += ' AND d.company_id = ?';
       params.push(req.user.companyId);
-      paramIndex++;
     } else if (req.user.role === 'driver') {
-      query += ` AND d.user_id = $${paramIndex}`;
+      query += ' AND d.user_id = ?';
       params.push(req.user.id);
-      paramIndex++;
     }
 
     if (req.query.status) {
-      query += ` AND d.status = $${paramIndex}`;
+      query += ' AND d.status = ?';
       params.push(req.query.status);
-      paramIndex++;
     }
 
     query += ' ORDER BY d.created_at DESC';
 
-    const result = await pgClient.query(query, params);
-    res.json(result.rows);
+    const [rows] = await pool.execute(query, params);
+    res.json(rows);
   } catch (error) {
     logger.error('Get drivers error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -143,30 +139,22 @@ app.get('/drivers', authenticateToken, async (req, res) => {
 app.get('/drivers/:id', authenticateToken, async (req, res) => {
   try {
     const driverId = req.params.id;
-
-    let query = `
-      SELECT d.*, u.email, u.name as user_name
-      FROM drivers d 
-      JOIN users u ON d.user_id = u.id 
-      WHERE d.id = $1
-    `;
+    let query = `SELECT d.*, u.email, u.name as user_name FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = ?`;
     const params = [driverId];
 
     if (req.user.role === 'company') {
-      query += ' AND d.company_id = $2';
+      query += ' AND d.company_id = ?';
       params.push(req.user.companyId);
     } else if (req.user.role === 'driver') {
-      query += ' AND d.user_id = $2';
+      query += ' AND d.user_id = ?';
       params.push(req.user.id);
     }
 
-    const result = await pgClient.query(query, params);
+    const [rows] = await pool.execute(query, params);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Driver not found' });
-    }
+    if (rows.length === 0) return res.status(404).json({ error: 'Driver not found' });
 
-    res.json(result.rows[0]);
+    res.json(rows[0]);
   } catch (error) {
     logger.error('Get driver error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -176,40 +164,27 @@ app.get('/drivers/:id', authenticateToken, async (req, res) => {
 app.patch('/drivers/:id/location', authenticateToken, authorize(['driver']), async (req, res) => {
   try {
     const { error, value } = updateLocationSchema.validate(req.body);
-    if (error) {
-      return res.status(400).json({ error: error.details[0].message });
-    }
+    if (error) return res.status(400).json({ error: error.details[0].message });
 
     const driverId = req.params.id;
     const { lat, lng } = value;
 
-    const driverCheck = await pgClient.query(
-      'SELECT id FROM drivers WHERE user_id = $1 AND id = $2',
+    const [driverCheck] = await pool.execute(
+      'SELECT id FROM drivers WHERE user_id = ? AND id = ?',
       [req.user.id, driverId]
     );
 
-    if (driverCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Driver not found or access denied' });
-    }
+    if (driverCheck.length === 0) return res.status(404).json({ error: 'Driver not found or access denied' });
 
-    const result = await pgClient.query(`
-      UPDATE drivers 
-      SET current_location = POINT($1, $2), last_location_update = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3
-      RETURNING *
-    `, [lng, lat, driverId]);
+    await pool.execute(
+      `UPDATE drivers SET current_lat = ?, current_lng = ?, last_location_update = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [lat, lng, driverId]
+    );
 
-    const driver = result.rows[0];
-    
-    await redisClient.setex(`driver:${driverId}:location`, 300, JSON.stringify({ lat, lng }));
-
+    await redisClient.setEx(`driver:${driverId}:location`, 300, JSON.stringify({ lat, lng }));
     broadcastLocationUpdate(driverId, { lat, lng });
 
-    res.json({ 
-      id: driver.id,
-      location: { lat, lng },
-      lastLocationUpdate: driver.last_location_update
-    });
+    res.json({ id: driverId, location: { lat, lng }, lastLocationUpdate: new Date() });
   } catch (error) {
     logger.error('Update location error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -219,41 +194,34 @@ app.patch('/drivers/:id/location', authenticateToken, authorize(['driver']), asy
 app.patch('/drivers/:id/status', authenticateToken, authorize(['driver', 'company', 'admin']), async (req, res) => {
   try {
     const { error, value } = updateStatusSchema.validate(req.body);
-    if (error) {
-      return res.status(400).json({ error: error.details[0].message });
-    }
+    if (error) return res.status(400).json({ error: error.details[0].message });
 
     const driverId = req.params.id;
     const { status } = value;
 
-    let query = 'SELECT * FROM drivers WHERE id = $1';
-    const params = [driverId];
+    let checkQuery = 'SELECT * FROM drivers WHERE id = ?';
+    const checkParams = [driverId];
 
     if (req.user.role === 'driver') {
-      query += ' AND user_id = $2';
-      params.push(req.user.id);
+      checkQuery += ' AND user_id = ?';
+      checkParams.push(req.user.id);
     } else if (req.user.role === 'company') {
-      query += ' AND company_id = $2';
-      params.push(req.user.companyId);
+      checkQuery += ' AND company_id = ?';
+      checkParams.push(req.user.companyId);
     }
 
-    const driverCheck = await pgClient.query(query, params);
+    const [driverCheck] = await pool.execute(checkQuery, checkParams);
+    if (driverCheck.length === 0) return res.status(404).json({ error: 'Driver not found or access denied' });
 
-    if (driverCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Driver not found or access denied' });
-    }
+    await pool.execute(
+      `UPDATE drivers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [status, driverId]
+    );
 
-    const result = await pgClient.query(`
-      UPDATE drivers 
-      SET status = $1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-      RETURNING *
-    `, [status, driverId]);
+    const [rows] = await pool.execute('SELECT * FROM drivers WHERE id = ?', [driverId]);
+    const driver = rows[0];
 
-    const driver = result.rows[0];
-    
-    await redisClient.setex(`driver:${driverId}:status`, 3600, status);
-
+    await redisClient.setEx(`driver:${driverId}:status`, 3600, status);
     broadcastDriverUpdate(driverId, { action: 'status_updated', driver, status });
 
     res.json(driver);
@@ -267,39 +235,27 @@ app.get('/drivers/:id/location', authenticateToken, async (req, res) => {
   try {
     const driverId = req.params.id;
 
-    let cachedLocation = await redisClient.get(`driver:${driverId}:location`);
-    if (cachedLocation) {
-      return res.json(JSON.parse(cachedLocation));
-    }
+    const cachedLocation = await redisClient.get(`driver:${driverId}:location`);
+    if (cachedLocation) return res.json(JSON.parse(cachedLocation));
 
-    let query = 'SELECT current_location, last_location_update FROM drivers WHERE id = $1';
+    let query = 'SELECT current_lat, current_lng, last_location_update FROM drivers WHERE id = ?';
     const params = [driverId];
 
     if (req.user.role === 'company') {
-      query += ' AND company_id = $2';
+      query += ' AND company_id = ?';
       params.push(req.user.companyId);
     }
 
-    const result = await pgClient.query(query, params);
+    const [rows] = await pool.execute(query, params);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Driver not found' });
-    }
+    if (rows.length === 0) return res.status(404).json({ error: 'Driver not found' });
 
-    const driver = result.rows[0];
-    const location = driver.current_location ? {
-      lat: driver.current_location.y,
-      lng: driver.current_location.x
-    } : null;
+    const driver = rows[0];
+    const location = driver.current_lat != null ? { lat: driver.current_lat, lng: driver.current_lng } : null;
 
-    if (location) {
-      await redisClient.setex(`driver:${driverId}:location`, 300, JSON.stringify(location));
-    }
+    if (location) await redisClient.setEx(`driver:${driverId}:location`, 300, JSON.stringify(location));
 
-    res.json({
-      location,
-      lastLocationUpdate: driver.last_location_update
-    });
+    res.json({ location, lastLocationUpdate: driver.last_location_update });
   } catch (error) {
     logger.error('Get driver location error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -314,15 +270,15 @@ app.get('/drivers/company/:companyId/available', authenticateToken, authorize(['
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const result = await pgClient.query(`
-      SELECT d.*, u.email, u.name as user_name
-      FROM drivers d 
-      JOIN users u ON d.user_id = u.id 
-      WHERE d.company_id = $1 AND d.status = 'available'
-      ORDER BY d.last_location_update DESC NULLS LAST
-    `, [companyId]);
+    const [rows] = await pool.execute(
+      `SELECT d.*, u.email, u.name as user_name
+       FROM drivers d JOIN users u ON d.user_id = u.id
+       WHERE d.company_id = ? AND d.status = 'available'
+       ORDER BY d.last_location_update DESC`,
+      [companyId]
+    );
 
-    res.json(result.rows);
+    res.json(rows);
   } catch (error) {
     logger.error('Get available drivers error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -333,11 +289,10 @@ app.post('/orders/assigned', authenticateToken, async (req, res) => {
   try {
     const { orderId, driverId } = req.body;
 
-    await pgClient.query(`
-      UPDATE drivers 
-      SET status = 'busy', updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1
-    `, [driverId]);
+    await pool.execute(
+      `UPDATE drivers SET status = 'busy', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [driverId]
+    );
 
     broadcastDriverUpdate(driverId, { action: 'order_assigned', orderId, status: 'busy' });
 
@@ -355,44 +310,29 @@ app.get('/health', (req, res) => {
 io.on('connection', (socket) => {
   logger.info('Client connected to driver service');
 
-  socket.on('subscribe:driver', (driverId) => {
-    socket.join(`driver:${driverId}`);
-    logger.info(`Client subscribed to driver ${driverId}`);
-  });
-
-  socket.on('subscribe:driver:location', (driverId) => {
-    socket.join(`driver:${driverId}:location`);
-    logger.info(`Client subscribed to driver ${driverId} location updates`);
-  });
-
-  socket.on('unsubscribe:driver', (driverId) => {
-    socket.leave(`driver:${driverId}`);
-    logger.info(`Client unsubscribed from driver ${driverId}`);
-  });
+  socket.on('subscribe:driver', (driverId) => socket.join(`driver:${driverId}`));
+  socket.on('subscribe:driver:location', (driverId) => socket.join(`driver:${driverId}:location`));
+  socket.on('unsubscribe:driver', (driverId) => socket.leave(`driver:${driverId}`));
 
   socket.on('location:update', async (data) => {
     try {
       const { driverId, lat, lng, token } = data;
-      
       const response = await axios.get(`${process.env.AUTH_SERVICE_URL || 'http://localhost:3001'}/validate`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
       if (response.data.valid && response.data.user.role === 'driver') {
-        const driverCheck = await pgClient.query(
-          'SELECT id FROM drivers WHERE user_id = $1 AND id = $2',
+        const [driverCheck] = await pool.execute(
+          'SELECT id FROM drivers WHERE user_id = ? AND id = ?',
           [response.data.user.id, driverId]
         );
 
-        if (driverCheck.rows.length > 0) {
-          await pgClient.query(`
-            UPDATE drivers 
-            SET current_location = POINT($1, $2), last_location_update = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-            WHERE id = $3
-          `, [lng, lat, driverId]);
-
-          await redisClient.setex(`driver:${driverId}:location`, 300, JSON.stringify({ lat, lng }));
-
+        if (driverCheck.length > 0) {
+          await pool.execute(
+            `UPDATE drivers SET current_lat = ?, current_lng = ?, last_location_update = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [lat, lng, driverId]
+          );
+          await redisClient.setEx(`driver:${driverId}:location`, 300, JSON.stringify({ lat, lng }));
           broadcastLocationUpdate(driverId, { lat, lng });
         }
       }
@@ -401,18 +341,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    logger.info('Client disconnected from driver service');
-  });
+  socket.on('disconnect', () => logger.info('Client disconnected from driver service'));
 });
 
 const startServer = async () => {
   try {
-    await pgClient.connect();
     await redisClient.connect();
-    server.listen(PORT, () => {
-      logger.info(`Driver service running on port ${PORT}`);
-    });
+    const conn = await pool.getConnection();
+    conn.release();
+    server.listen(PORT, () => logger.info(`Driver service running on port ${PORT}`));
   } catch (error) {
     logger.error('Failed to start server:', error);
     process.exit(1);

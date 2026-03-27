@@ -4,7 +4,7 @@ const helmet = require('helmet');
 const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { Pool } = require('pg');
+const mysql = require('mysql2/promise');
 const redis = require('redis');
 const Joi = require('joi');
 const winston = require('winston');
@@ -27,17 +27,21 @@ const logger = winston.createLogger({
   ]
 });
 
-const pgClient = new Pool({
+const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'delivery_tracking',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'password',
+  port: process.env.DB_PORT || 3306,
+  database: process.env.DB_NAME || 'umbrela',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  waitForConnections: true,
+  connectionLimit: 10,
 });
 
 const redisClient = redis.createClient({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
+  socket: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: process.env.REDIS_PORT || 6379,
+  }
 });
 
 redisClient.on('error', (err) => logger.error('Redis Client Error', err));
@@ -45,6 +49,16 @@ redisClient.on('error', (err) => logger.error('Redis Client Error', err));
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const expectedToken = process.env.CSRF_TOKEN;
+  if (!expectedToken) return next();
+  const providedToken = req.headers['x-csrf-token'];
+  if (providedToken !== expectedToken) {
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  }
+  next();
+});
 
 const loginSchema = Joi.object({
   email: Joi.string().email().required(),
@@ -111,16 +125,16 @@ app.post('/login', async (req, res) => {
 
     const { email, password } = value;
 
-    const result = await pgClient.query(
-      'SELECT id, email, password, name, role, company_id FROM users WHERE email = $1',
+    const [rows] = await pool.execute(
+      'SELECT id, email, password, name, role, company_id FROM users WHERE email = ?',
       [email]
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const user = result.rows[0];
+    const user = rows[0];
     const isValidPassword = await bcrypt.compare(password, user.password);
 
     if (!isValidPassword) {
@@ -129,7 +143,7 @@ app.post('/login', async (req, res) => {
 
     const token = generateToken(user);
     
-    await redisClient.setex(`token:${user.id}`, 86400, token);
+    await redisClient.setEx(`token:${user.id}`, 86400, token);
 
     res.json({
       token,
@@ -156,23 +170,29 @@ app.post('/register', async (req, res) => {
 
     const { email, password, name, role, companyId } = value;
 
-    const existingUser = await pgClient.query(
-      'SELECT id FROM users WHERE email = $1',
+    const [existing] = await pool.execute(
+      'SELECT id FROM users WHERE email = ?',
       [email]
     );
 
-    if (existingUser.rows.length > 0) {
+    if (existing.length > 0) {
       return res.status(409).json({ error: 'Email already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const result = await pgClient.query(
-      'INSERT INTO users (email, password, name, role, company_id) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, role, company_id',
+    const [result] = await pool.execute(
+      'INSERT INTO users (email, password, name, role, company_id) VALUES (?, ?, ?, ?, ?)',
       [email, hashedPassword, name, role, companyId || null]
     );
 
-    const user = result.rows[0];
+    const userId = result.insertId;
+    const [userRows] = await pool.execute(
+      'SELECT id, email, name, role, company_id FROM users WHERE id = ?',
+      [userId]
+    );
+
+    const user = userRows[0];
     const token = generateToken(user);
 
     res.status(201).json({
@@ -203,16 +223,16 @@ app.post('/logout', authenticateToken, async (req, res) => {
 
 app.get('/profile', authenticateToken, async (req, res) => {
   try {
-    const result = await pgClient.query(
-      'SELECT id, email, name, role, company_id, created_at FROM users WHERE id = $1',
+    const [rows] = await pool.execute(
+      'SELECT id, email, name, role, company_id, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const user = result.rows[0];
+    const user = rows[0];
     res.json({
       id: user.id,
       email: user.email,
@@ -237,8 +257,10 @@ app.get('/health', (req, res) => {
 
 const startServer = async () => {
   try {
-    await pgClient.connect();
     await redisClient.connect();
+    // Test MySQL connection
+    const conn = await pool.getConnection();
+    conn.release();
     app.listen(PORT, () => {
       logger.info(`Auth service running on port ${PORT}`);
     });

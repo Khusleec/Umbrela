@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const dotenv = require('dotenv');
-const { Pool } = require('pg');
+const mysql = require('mysql2/promise');
 const redis = require('redis');
 const Joi = require('joi');
 const winston = require('winston');
@@ -36,17 +36,21 @@ const logger = winston.createLogger({
   ]
 });
 
-const pgClient = new Pool({
+const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'delivery_tracking',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'password',
+  port: process.env.DB_PORT || 3306,
+  database: process.env.DB_NAME || 'umbrela',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  waitForConnections: true,
+  connectionLimit: 10,
 });
 
 const redisClient = redis.createClient({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
+  socket: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: process.env.REDIS_PORT || 6379,
+  }
 });
 
 redisClient.on('error', (err) => logger.error('Redis Client Error', err));
@@ -54,6 +58,16 @@ redisClient.on('error', (err) => logger.error('Redis Client Error', err));
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const expectedToken = process.env.CSRF_TOKEN;
+  if (!expectedToken) return next();
+  const providedToken = req.headers['x-csrf-token'];
+  if (providedToken !== expectedToken) {
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  }
+  next();
+});
 
 const createOrderSchema = Joi.object({
   userId: Joi.number().required(),
@@ -130,27 +144,16 @@ app.post('/orders', authenticateToken, authorize(['user', 'company', 'admin']), 
     const estimatedDeliveryTime = new Date();
     estimatedDeliveryTime.setHours(estimatedDeliveryTime.getHours() + 2);
 
-    const result = await pgClient.query(`
-      INSERT INTO orders (user_id, company_id, pickup_address, delivery_address, pickup_location, delivery_location, estimated_delivery_time, notes)
-      VALUES ($1, $2, $3, $4, POINT($5, $6), POINT($7, $8), $9, $10)
-      RETURNING *
-    `, [
-      userId,
-      companyId,
-      pickupAddress,
-      deliveryAddress,
-      pickupLocation.lng,
-      pickupLocation.lat,
-      deliveryLocation.lng,
-      deliveryLocation.lat,
-      estimatedDeliveryTime,
-      notes || null
-    ]);
+    const [result] = await pool.execute(
+      `INSERT INTO orders (user_id, company_id, pickup_address, delivery_address, pickup_lat, pickup_lng, delivery_lat, delivery_lng, estimated_delivery_time, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, companyId, pickupAddress, deliveryAddress, pickupLocation.lat, pickupLocation.lng, deliveryLocation.lat, deliveryLocation.lng, estimatedDeliveryTime, notes || null]
+    );
 
-    const order = result.rows[0];
+    const [rows] = await pool.execute('SELECT * FROM orders WHERE id = ?', [result.insertId]);
+    const order = rows[0];
     
-    await redisClient.setex(`order:${order.id}`, 3600, JSON.stringify(order));
-
+    await redisClient.setEx(`order:${order.id}`, 3600, JSON.stringify(order));
     broadcastOrderUpdate(order.id, { action: 'created', order });
 
     try {
@@ -174,38 +177,32 @@ app.get('/orders', authenticateToken, async (req, res) => {
   try {
     let query = 'SELECT * FROM orders WHERE 1=1';
     const params = [];
-    let paramIndex = 1;
 
     if (req.user.role === 'user') {
-      query += ` AND user_id = $${paramIndex}`;
+      query += ' AND user_id = ?';
       params.push(req.user.id);
-      paramIndex++;
     } else if (req.user.role === 'company') {
-      query += ` AND company_id = $${paramIndex}`;
+      query += ' AND company_id = ?';
       params.push(req.user.companyId);
-      paramIndex++;
     } else if (req.user.role === 'driver') {
-      query += ` AND driver_id = $${paramIndex}`;
+      query += ' AND driver_id = ?';
       params.push(req.user.id);
-      paramIndex++;
     }
 
     if (req.query.status) {
-      query += ` AND status = $${paramIndex}`;
+      query += ' AND status = ?';
       params.push(req.query.status);
-      paramIndex++;
     }
 
     query += ' ORDER BY created_at DESC';
 
     if (req.query.limit) {
-      query += ` LIMIT $${paramIndex}`;
+      query += ' LIMIT ?';
       params.push(parseInt(req.query.limit));
-      paramIndex++;
     }
 
-    const result = await pgClient.query(query, params);
-    res.json(result.rows);
+    const [rows] = await pool.execute(query, params);
+    res.json(rows);
   } catch (error) {
     logger.error('Get orders error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -216,33 +213,33 @@ app.get('/orders/:id', authenticateToken, async (req, res) => {
   try {
     const orderId = req.params.id;
 
-    let cachedOrder = await redisClient.get(`order:${orderId}`);
+    const cachedOrder = await redisClient.get(`order:${orderId}`);
     if (cachedOrder) {
       return res.json(JSON.parse(cachedOrder));
     }
 
-    let query = 'SELECT * FROM orders WHERE id = $1';
+    let query = 'SELECT * FROM orders WHERE id = ?';
     const params = [orderId];
 
     if (req.user.role === 'user') {
-      query += ' AND user_id = $2';
+      query += ' AND user_id = ?';
       params.push(req.user.id);
     } else if (req.user.role === 'company') {
-      query += ' AND company_id = $2';
+      query += ' AND company_id = ?';
       params.push(req.user.companyId);
     } else if (req.user.role === 'driver') {
-      query += ' AND driver_id = $2';
+      query += ' AND driver_id = ?';
       params.push(req.user.id);
     }
 
-    const result = await pgClient.query(query, params);
+    const [rows] = await pool.execute(query, params);
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const order = result.rows[0];
-    await redisClient.setex(`order:${orderId}`, 3600, JSON.stringify(order));
+    const order = rows[0];
+    await redisClient.setEx(`order:${orderId}`, 3600, JSON.stringify(order));
 
     res.json(order);
   } catch (error) {
@@ -261,33 +258,28 @@ app.post('/orders/:id/assign', authenticateToken, authorize(['company', 'admin']
     const orderId = req.params.id;
     const { driverId } = value;
 
-    const orderCheck = await pgClient.query(
-      'SELECT * FROM orders WHERE id = $1 AND company_id = $2',
+    const [orderCheck] = await pool.execute(
+      'SELECT * FROM orders WHERE id = ? AND company_id = ?',
       [orderId, req.user.companyId]
     );
 
-    if (orderCheck.rows.length === 0) {
+    if (orderCheck.length === 0) {
       return res.status(404).json({ error: 'Order not found or access denied' });
     }
 
-    const result = await pgClient.query(`
-      UPDATE orders 
-      SET driver_id = $1, status = 'assigned', updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-      RETURNING *
-    `, [driverId, orderId]);
+    await pool.execute(
+      `UPDATE orders SET driver_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [driverId, orderId]
+    );
 
-    const order = result.rows[0];
+    const [rows] = await pool.execute('SELECT * FROM orders WHERE id = ?', [orderId]);
+    const order = rows[0];
     
-    await redisClient.setex(`order:${orderId}`, 3600, JSON.stringify(order));
-
+    await redisClient.setEx(`order:${orderId}`, 3600, JSON.stringify(order));
     broadcastOrderUpdate(orderId, { action: 'assigned', order });
 
     try {
-      await axios.post(`${process.env.DRIVER_SERVICE_URL || 'http://localhost:3003'}/orders/assigned`, {
-        orderId,
-        driverId,
-      });
+      await axios.post(`${process.env.DRIVER_SERVICE_URL || 'http://localhost:3003'}/orders/assigned`, { orderId, driverId });
     } catch (driverError) {
       logger.error('Failed to notify driver service:', driverError);
     }
@@ -309,44 +301,43 @@ app.patch('/orders/:id/status', authenticateToken, authorize(['driver', 'company
     const orderId = req.params.id;
     const { status } = value;
 
-    let query = 'SELECT * FROM orders WHERE id = $1';
-    const params = [orderId];
+    let checkQuery = 'SELECT * FROM orders WHERE id = ?';
+    const checkParams = [orderId];
 
     if (req.user.role === 'driver') {
-      query += ' AND driver_id = $2';
-      params.push(req.user.id);
+      checkQuery += ' AND driver_id = ?';
+      checkParams.push(req.user.id);
     } else if (req.user.role === 'company') {
-      query += ' AND company_id = $2';
-      params.push(req.user.companyId);
+      checkQuery += ' AND company_id = ?';
+      checkParams.push(req.user.companyId);
     }
 
-    const orderCheck = await pgClient.query(query, params);
+    const [orderCheck] = await pool.execute(checkQuery, checkParams);
 
-    if (orderCheck.rows.length === 0) {
+    if (orderCheck.length === 0) {
       return res.status(404).json({ error: 'Order not found or access denied' });
     }
 
-    let updateQuery = 'UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP';
-    let updateParams = [status, orderId];
+    let updateQuery = 'UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP';
+    let updateParams = [status];
 
     if (status === 'delivered') {
       updateQuery += ', actual_delivery_time = CURRENT_TIMESTAMP';
     }
 
-    updateQuery += ' WHERE id = $2 RETURNING *';
+    updateQuery += ' WHERE id = ?';
+    updateParams.push(orderId);
 
-    const result = await pgClient.query(updateQuery, updateParams);
-    const order = result.rows[0];
+    await pool.execute(updateQuery, updateParams);
+    const [rows] = await pool.execute('SELECT * FROM orders WHERE id = ?', [orderId]);
+    const order = rows[0];
 
-    await redisClient.setex(`order:${orderId}`, 3600, JSON.stringify(order));
-
+    await redisClient.setEx(`order:${orderId}`, 3600, JSON.stringify(order));
     broadcastOrderUpdate(orderId, { action: 'status_updated', order, status });
 
     try {
       await axios.post(`${process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3005'}/notify/status-update`, {
-        orderId,
-        status,
-        userId: order.user_id,
+        orderId, status, userId: order.user_id,
       });
     } catch (notificationError) {
       logger.error('Failed to send notification:', notificationError);
@@ -368,12 +359,10 @@ io.on('connection', (socket) => {
 
   socket.on('subscribe:order', (orderId) => {
     socket.join(`order:${orderId}`);
-    logger.info(`Client subscribed to order ${orderId}`);
   });
 
   socket.on('unsubscribe:order', (orderId) => {
     socket.leave(`order:${orderId}`);
-    logger.info(`Client unsubscribed from order ${orderId}`);
   });
 
   socket.on('disconnect', () => {
@@ -383,8 +372,9 @@ io.on('connection', (socket) => {
 
 const startServer = async () => {
   try {
-    await pgClient.connect();
     await redisClient.connect();
+    const conn = await pool.getConnection();
+    conn.release();
     server.listen(PORT, () => {
       logger.info(`Order service running on port ${PORT}`);
     });

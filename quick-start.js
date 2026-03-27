@@ -37,8 +37,8 @@ function installDependencies(serviceName) {
 const services = ['auth', 'orders', 'drivers', 'analytics', 'notifications', 'gateway'];
 let allInstalled = true;
 
-for (const serviceName of services) {
-  if (!installDependencies(serviceName)) {
+for (const service of services) {
+  if (!installDependencies(service)) {
     allInstalled = false;
   }
 }
@@ -50,13 +50,13 @@ if (!allInstalled) {
 
 // Create logs directories
 console.log('\n📁 Creating log directories...');
-services.forEach(serviceName => {
-  const logPath = pathSecurity.getServicePath(serviceName);
+services.forEach(service => {
+  const logPath = pathSecurity.getServicePath(service);
   if (logPath) {
     const logDir = path.join(logPath, 'logs');
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
-      console.log(`Created logs directory for ${serviceName} service`);
+      console.log(`Created logs directory for ${service} service`);
     }
   }
 });
@@ -120,7 +120,11 @@ demoServices.forEach((service, index) => {
   setTimeout(() => {
     console.log(`Starting ${service.name} service on port ${service.port}...`);
     
-    const servicePath = path.join(__dirname, 'services', service.name);
+    const servicePath = pathSecurity.getServicePath(service.name);
+    if (!servicePath) {
+      console.error(`❌ Invalid service path for ${service.name}`);
+      return;
+    }
     
     const child = spawn('node', ['src/index.js'], {
       cwd: servicePath,
@@ -156,7 +160,7 @@ demoServices.forEach((service, index) => {
     });
 
     processes.push({ service: service.name, child, port: service.port });
-  }, index * 3000); // 3 second delay between services
+  }, index * 3000);
 });
 
 // Handle graceful shutdown

@@ -15,9 +15,21 @@ spec:
       labels:
         app: auth-service
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
       containers:
       - name: auth-service
-        image: delivery-tracking/auth-service:latest
+        image: delivery-tracking/auth-service:1.0.0
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 3001
         envFrom:
@@ -78,9 +90,21 @@ spec:
       labels:
         app: order-service
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
       containers:
       - name: order-service
-        image: delivery-tracking/order-service:latest
+        image: delivery-tracking/order-service:1.0.0
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 3002
         envFrom:
@@ -139,9 +163,21 @@ spec:
       labels:
         app: driver-service
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
       containers:
       - name: driver-service
-        image: delivery-tracking/driver-service:latest
+        image: delivery-tracking/driver-service:1.0.0
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 3003
         envFrom:
@@ -200,9 +236,21 @@ spec:
       labels:
         app: analytics-service
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
       containers:
       - name: analytics-service
-        image: delivery-tracking/analytics-service:latest
+        image: delivery-tracking/analytics-service:1.0.0
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 3004
         envFrom:
@@ -261,9 +309,21 @@ spec:
       labels:
         app: notification-service
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
       containers:
       - name: notification-service
-        image: delivery-tracking/notification-service:latest
+        image: delivery-tracking/notification-service:1.0.0
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 3005
         envFrom:

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext.jsx'
 import { User, Lock, Mail } from 'lucide-react'
 
@@ -36,9 +36,9 @@ function Login() {
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
             Or{' '}
-            <a href="#" className="font-medium text-indigo-600 hover:text-indigo-500">
-              start your 14-day free trial
-            </a>
+            <Link to="/register" className="font-medium text-indigo-600 hover:text-indigo-500">
+              create a new account
+            </Link>
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>

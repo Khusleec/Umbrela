@@ -42,7 +42,7 @@ JWT_SECRET=demo-secret-key-for-testing
 LOG_LEVEL=info
 `;
 
-fs.writeFileSync(path.join(__dirname, '.env'), envContent);
+fs.writeFileSync(envPath, envContent);
 
 // Create logs directories
 const services = ['auth', 'gateway'];
@@ -96,7 +96,7 @@ services.forEach((serviceName, index) => {
       const lines = data.toString().split('\n');
       lines.forEach(line => {
         if (line.trim()) {
-          console.log(`${color}[${service.toUpperCase()}]${colors.reset} ${line}`);
+          console.log(`${color}[${serviceName.toUpperCase()}]${colors.reset} ${line}`);
         }
       });
     });
@@ -105,20 +105,20 @@ services.forEach((serviceName, index) => {
       const lines = data.toString().split('\n');
       lines.forEach(line => {
         if (line.trim()) {
-          console.log(`${color}[${service.toUpperCase()}]${colors.reset} \x1b[31m${line}\x1b[0m`);
+          console.log(`${color}[${serviceName.toUpperCase()}]${colors.reset} \x1b[31m${line}\x1b[0m`);
         }
       });
     });
 
     child.on('close', (code) => {
-      console.log(`${color}[${service.toUpperCase()}]${colors.reset} Process exited with code ${code}`);
+      console.log(`${color}[${serviceName.toUpperCase()}]${colors.reset} Process exited with code ${code}`);
     });
 
     child.on('error', (error) => {
-      console.log(`${color}[${service.toUpperCase()}]${colors.reset} \x1b[31mError: ${error.message}\x1b[0m`);
+      console.log(`${color}[${serviceName.toUpperCase()}]${colors.reset} \x1b[31mError: ${error.message}\x1b[0m`);
     });
 
-    processes.push({ service, child });
+    processes.push({ service: serviceName, child });
   }, index * 2000); // 2 second delay
 });
 
