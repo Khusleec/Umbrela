@@ -1,6 +1,10 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const PathSecurity = require('./utils/pathSecurity');
+
+// Initialize path security
+const pathSecurity = new PathSecurity(__dirname);
 
 // Create logs directories for all services
 const services = ['auth', 'orders', 'drivers', 'analytics', 'notifications', 'gateway'];
@@ -14,18 +18,31 @@ const colors = {
   reset: '\x1b[0m'  // Reset
 };
 
-console.log('🚀 Starting Delivery Tracking System Services (without database)...\n');
-
-// Create logs directories
-services.forEach(service => {
-  const logDir = path.join(__dirname, 'services', service, 'logs');
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
-    console.log(`Created logs directory for ${service} service`);
+services.forEach(serviceName => {
+  if (!pathSecurity.isValidService(serviceName)) {
+    console.error(`❌ Invalid service name: ${serviceName}`);
+    return;
+  }
+  
+  const servicePath = pathSecurity.getServicePath(serviceName);
+  if (servicePath) {
+    const logDir = path.join(servicePath, 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+      console.log(`Created logs directory for ${serviceName} service`);
+    }
   }
 });
 
+console.log('🚀 Starting Delivery Tracking System Services (without database)...\n');
+
 // Create .env file with mock database settings
+const envPath = pathSecurity.resolvePath('.env');
+if (!envPath) {
+  console.error('❌ Invalid .env path');
+  process.exit(1);
+}
+
 const envContent = `
 # Database Configuration (using mock for demo)
 DB_HOST=localhost
@@ -69,20 +86,24 @@ SENDGRID_FROM_EMAIL=noreply@delivery.com
 LOG_LEVEL=info
 `;
 
-fs.writeFileSync(path.join(__dirname, '.env'), envContent);
+fs.writeFileSync(envPath, envContent);
 
-// Start services in order (gateway last)
-const serviceOrder = ['auth', 'gateway'];
+// Start services
 const processes = [];
 
-serviceOrder.forEach((service, index) => {
+services.forEach((serviceName, index) => {
   setTimeout(() => {
-    const servicePath = path.join(__dirname, 'services', service);
-    const color = colors[service];
+    const servicePath = pathSecurity.getServicePath(serviceName);
+    if (!servicePath) {
+      console.error(`❌ Invalid service path for ${serviceName}`);
+      return;
+    }
     
-    console.log(`Starting ${service} service...`);
+    const color = colors[serviceName];
     
-    const child = spawn('npm', ['start'], {
+    console.log(`Starting ${serviceName} service...`);
+    
+    const child = spawn('node', ['src/index.js'], {
       cwd: servicePath,
       stdio: 'pipe',
       shell: true,

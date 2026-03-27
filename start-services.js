@@ -1,6 +1,10 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const PathSecurity = require('./utils/pathSecurity');
+
+// Initialize path security
+const pathSecurity = new PathSecurity(__dirname);
 
 // Create logs directories for all services
 const services = ['auth', 'orders', 'drivers', 'analytics', 'notifications', 'gateway'];
@@ -17,20 +21,38 @@ const colors = {
 console.log('🚀 Starting Delivery Tracking System Services...\n');
 
 // Create logs directories
-services.forEach(service => {
-  const logDir = path.join(__dirname, 'services', service, 'logs');
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
-    console.log(`Created logs directory for ${service} service`);
+services.forEach(serviceName => {
+  if (!pathSecurity.isValidService(serviceName)) {
+    console.error(`❌ Invalid service name: ${serviceName}`);
+    return;
+  }
+  
+  const servicePath = pathSecurity.getServicePath(serviceName);
+  if (servicePath) {
+    const logDir = path.join(servicePath, 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+      console.log(`Created logs directory for ${serviceName} service`);
+    }
   }
 });
 
 // Start all services
 const processes = [];
 
-services.forEach(service => {
-  const servicePath = path.join(__dirname, 'services', service);
-  const color = colors[service];
+services.forEach(serviceName => {
+  if (!pathSecurity.isValidService(serviceName)) {
+    console.error(`❌ Invalid service name: ${serviceName}`);
+    return;
+  }
+  
+  const servicePath = pathSecurity.getServicePath(serviceName);
+  if (!servicePath) {
+    console.error(`❌ Invalid service path for ${serviceName}`);
+    return;
+  }
+  
+  const color = colors[serviceName];
   
   const child = spawn('npm', ['start'], {
     cwd: servicePath,

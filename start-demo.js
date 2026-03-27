@@ -1,10 +1,20 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const PathSecurity = require('./utils/pathSecurity');
 
 console.log('🚀 Starting Delivery Tracking System - Demo Mode\n');
 
+// Initialize path security
+const pathSecurity = new PathSecurity(__dirname);
+
 // Create demo .env without database
+const envPath = pathSecurity.resolvePath('.env');
+if (!envPath) {
+  console.error('❌ Invalid .env path');
+  process.exit(1);
+}
+
 const envContent = `
 # Demo Mode - No Database Required
 NODE_ENV=demo
@@ -39,13 +49,22 @@ const services = ['auth', 'gateway'];
 const colors = {
   auth: '\x1b[36m', // Cyan
   gateway: '\x1b[31m', // Red
-  reset: '\x1b[0m'
+  reset: '\x1b[0m'  // Reset
 };
 
-services.forEach(service => {
-  const logDir = path.join(__dirname, 'services', service, 'logs');
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
+services.forEach(serviceName => {
+  if (!pathSecurity.isValidService(serviceName)) {
+    console.error(`❌ Invalid service name: ${serviceName}`);
+    return;
+  }
+  
+  const servicePath = pathSecurity.getServicePath(serviceName);
+  if (servicePath) {
+    const logDir = path.join(servicePath, 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+      console.log(`Created logs directory for ${serviceName} service`);
+    }
   }
 });
 
@@ -54,12 +73,17 @@ console.log('📦 Starting Auth and Gateway services...\n');
 // Start services
 const processes = [];
 
-services.forEach((service, index) => {
+services.forEach((serviceName, index) => {
   setTimeout(() => {
-    const servicePath = path.join(__dirname, 'services', service);
-    const color = colors[service];
+    const servicePath = pathSecurity.getServicePath(serviceName);
+    if (!servicePath) {
+      console.error(`❌ Invalid service path for ${serviceName}`);
+      return;
+    }
     
-    console.log(`Starting ${service} service...`);
+    const color = colors[serviceName];
+    
+    console.log(`Starting ${serviceName} service...`);
     
     const child = spawn('node', ['src/index.js'], {
       cwd: servicePath,

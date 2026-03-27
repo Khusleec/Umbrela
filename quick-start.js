@@ -1,21 +1,32 @@
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const PathSecurity = require('./utils/pathSecurity');
 
 console.log('🚀 Quick Start Delivery Tracking System\n');
 
+// Initialize path security
+const pathSecurity = new PathSecurity(__dirname);
+
 // Function to install dependencies if needed
-function installDependencies(servicePath) {
+function installDependencies(serviceName) {
+  const servicePath = pathSecurity.getServicePath(serviceName);
+  if (!servicePath) {
+    console.error(`❌ Invalid service name: ${serviceName}`);
+    return false;
+  }
+
   const packageJsonPath = path.join(servicePath, 'package.json');
   const nodeModulesPath = path.join(servicePath, 'node_modules');
   
   if (fs.existsSync(packageJsonPath) && !fs.existsSync(nodeModulesPath)) {
-    console.log(`📦 Installing dependencies for ${path.basename(servicePath)}...`);
+    console.log(`📦 Installing dependencies for ${serviceName}...`);
     try {
       execSync('npm install', { cwd: servicePath, stdio: 'inherit' });
-      console.log(`✅ Dependencies installed for ${path.basename(servicePath)}`);
+      console.log(`✅ Dependencies installed for ${serviceName}`);
+      return true;
     } catch (error) {
-      console.log(`❌ Failed to install dependencies for ${path.basename(servicePath)}`);
+      console.error(`❌ Failed to install dependencies for ${serviceName}:`, error.message);
       return false;
     }
   }
@@ -26,9 +37,8 @@ function installDependencies(servicePath) {
 const services = ['auth', 'orders', 'drivers', 'analytics', 'notifications', 'gateway'];
 let allInstalled = true;
 
-for (const service of services) {
-  const servicePath = path.join(__dirname, 'services', service);
-  if (!installDependencies(servicePath)) {
+for (const serviceName of services) {
+  if (!installDependencies(serviceName)) {
     allInstalled = false;
   }
 }
@@ -40,15 +50,24 @@ if (!allInstalled) {
 
 // Create logs directories
 console.log('\n📁 Creating log directories...');
-services.forEach(service => {
-  const logDir = path.join(__dirname, 'services', service, 'logs');
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
+services.forEach(serviceName => {
+  const logPath = pathSecurity.getServicePath(serviceName);
+  if (logPath) {
+    const logDir = path.join(logPath, 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+      console.log(`Created logs directory for ${serviceName} service`);
+    }
   }
 });
 
 // Create basic .env if it doesn't exist
-const envPath = path.join(__dirname, '.env');
+const envPath = pathSecurity.resolvePath('.env');
+if (!envPath) {
+  console.error('❌ Invalid .env path');
+  process.exit(1);
+}
+
 if (!fs.existsSync(envPath)) {
   console.log('📝 Creating .env file...');
   const envContent = `
