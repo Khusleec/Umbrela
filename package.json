@@ -1,0 +1,39 @@
+{
+  "name": "delivery-tracking-system",
+  "version": "1.0.0",
+  "description": "Real-time delivery tracking system with role-based access",
+  "main": "index.js",
+  "scripts": {
+    "start": "node start-demo.js",
+    "dev:auth": "cd services/auth && npm run dev",
+    "dev:orders": "cd services/orders && npm run dev",
+    "dev:drivers": "cd services/drivers && npm run dev",
+    "dev:notifications": "cd services/notifications && npm run dev",
+    "dev:analytics": "cd services/analytics && npm run dev",
+    "dev:gateway": "cd gateway && npm run dev",
+    "build": "npm run build:auth && npm run build:orders && npm run build:drivers && npm run build:notifications && npm run build:analytics && npm run build:gateway",
+    "build:auth": "cd services/auth && npm run build",
+    "build:orders": "cd services/orders && npm run build",
+    "build:drivers": "cd services/drivers && npm run build",
+    "build:notifications": "cd services/notifications && npm run build",
+    "build:analytics": "cd services/analytics && npm run build",
+    "build:gateway": "cd gateway && npm run build",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "migrate": "cd database && npm run migrate",
+    "seed": "cd database && npm run seed"
+  },
+  "keywords": [
+    "delivery",
+    "tracking",
+    "microservices",
+    "real-time",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

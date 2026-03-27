@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: delivery-config
+  namespace: delivery-tracking
+data:
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "delivery_tracking"
+  DB_USER: "postgres"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  AUTH_SERVICE_URL: "http://auth-service:3001"
+  ORDER_SERVICE_URL: "http://order-service:3002"
+  DRIVER_SERVICE_URL: "http://driver-service:3003"
+  ANALYTICS_SERVICE_URL: "http://analytics-service:3004"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:3005"
+  LOG_LEVEL: "info"

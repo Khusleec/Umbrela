@@ -1,0 +1,16 @@
+{
+  "name": "database-migrations",
+  "version": "1.0.0",
+  "description": "Database migrations and seeds",
+  "main": "index.js",
+  "scripts": {
+    "migrate": "node migrate.js",
+    "seed": "node seed.js",
+    "rollback": "node rollback.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.6.1",
+    "pg": "^8.20.0"
+  }
+}

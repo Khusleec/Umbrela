@@ -1,0 +1,218 @@
+version: '3.8'
+
+services:
+  # Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: delivery-postgres
+    environment:
+      POSTGRES_DB: delivery_tracking
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - delivery-network
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: delivery-redis
+    command: redis-server /usr/local/etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - delivery-network
+
+  # Auth Service
+  auth-service:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+    container_name: auth-service
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: delivery_tracking
+      DB_USER: postgres
+      DB_PASSWORD: password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
+    ports:
+      - "3001:3001"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./services/auth/logs:/app/logs
+    networks:
+      - delivery-network
+
+  # Order Service
+  order-service:
+    build:
+      context: ./services/orders
+      dockerfile: Dockerfile
+    container_name: order-service
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: delivery_tracking
+      DB_USER: postgres
+      DB_PASSWORD: password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: http://auth-service:3001
+      NOTIFICATION_SERVICE_URL: http://notification-service:3005
+    ports:
+      - "3002:3002"
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+    volumes:
+      - ./services/orders/logs:/app/logs
+    networks:
+      - delivery-network
+
+  # Driver Service
+  driver-service:
+    build:
+      context: ./services/drivers
+      dockerfile: Dockerfile
+    container_name: driver-service
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: delivery_tracking
+      DB_USER: postgres
+      DB_PASSWORD: password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: http://auth-service:3001
+    ports:
+      - "3003:3003"
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+    volumes:
+      - ./services/drivers/logs:/app/logs
+    networks:
+      - delivery-network
+
+  # Analytics Service
+  analytics-service:
+    build:
+      context: ./services/analytics
+      dockerfile: Dockerfile
+    container_name: analytics-service
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: delivery_tracking
+      DB_USER: postgres
+      DB_PASSWORD: password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: http://auth-service:3001
+    ports:
+      - "3004:3004"
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+    volumes:
+      - ./services/analytics/logs:/app/logs
+    networks:
+      - delivery-network
+
+  # Notification Service
+  notification-service:
+    build:
+      context: ./services/notifications
+      dockerfile: Dockerfile
+    container_name: notification-service
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: delivery_tracking
+      DB_USER: postgres
+      DB_PASSWORD: password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
+    ports:
+      - "3005:3005"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./services/notifications/logs:/app/logs
+    networks:
+      - delivery-network
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    environment:
+      NODE_ENV: production
+      AUTH_SERVICE_URL: http://auth-service:3001
+      ORDER_SERVICE_URL: http://order-service:3002
+      DRIVER_SERVICE_URL: http://driver-service:3003
+      ANALYTICS_SERVICE_URL: http://analytics-service:3004
+      NOTIFICATION_SERVICE_URL: http://notification-service:3005
+    ports:
+      - "3000:3000"
+    depends_on:
+      - auth-service
+      - order-service
+      - driver-service
+      - analytics-service
+      - notification-service
+    volumes:
+      - ./gateway/logs:/app/logs
+    networks:
+      - delivery-network
+
+  # Nginx Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: delivery-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - api-gateway
+    networks:
+      - delivery-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  delivery-network:
+    driver: bridge
